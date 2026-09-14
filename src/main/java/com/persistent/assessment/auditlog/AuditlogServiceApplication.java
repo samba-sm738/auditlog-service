@@ -1,4 +1,4 @@
-package com.persistent.assessment.auditlog_service;
+package com.persistent.assessment.auditlog;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
