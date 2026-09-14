@@ -1,0 +1,181 @@
+openapi: 3.1.0
+
+info:
+  title: AuditLog Service API
+  description: APIs for tamper evident audit log service
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+    description: local server to access rest apis
+
+paths:
+  /v1/audit/events:
+    post:
+      operationId: createAuditEvent
+      summary: Record an audit event
+      description: >-
+        Appends a new event to the tamper-evident audit log. The server assigns
+        the event id, sequence number, and content hash, and links the event to
+        the previous entry via previousHash to form a verifiable hash chain.
+      tags:
+        - Audit Events
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuditEventRequest'
+            example:
+              eventType: RECORD_UPDATED
+              actorId: user-42
+              resourceType: Customer
+              resourceId: cust-1001
+              payload:
+                field: address
+                oldValue: 123 Main St
+                newValue: 456 Oak Ave
+              timestamp: '2026-09-14T10:15:30Z'
+      responses:
+        '201':
+          description: Audit event recorded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventResponse'
+              example:
+                id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                sequenceNumber: 1024
+                eventType: RECORD_UPDATED
+                actorId: user-42
+                resourceType: Customer
+                resourceId: cust-1001
+                payload:
+                  field: address
+                  oldValue: 123 Main St
+                  newValue: 456 Oak Ave
+                timestamp: '2026-09-14T10:15:30Z'
+                previousHash: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3a94a8fe5ccb19ba61c4c0873
+                contentHash: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+        '400':
+          description: Invalid audit event request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    AuditEventFields:
+      type: object
+      description: Fields shared between the audit event request and the persisted audit event.
+      required:
+        - eventType
+        - actorId
+        - resourceType
+        - resourceId
+      properties:
+        eventType:
+          type: string
+          description: What happened (e.g., USER_LOGIN, RECORD_UPDATED, PERMISSION_GRANTED, USER_LOGOUT)
+          examples:
+            - USER_LOGIN
+            - RECORD_UPDATED
+            - PERMISSION_GRANTED
+            - USER_LOGOUT
+        actorId:
+          type: string
+          description: Who or what caused the event
+          examples:
+            - user-42
+        resourceType:
+          type: string
+          description: The type of resource affected
+          examples:
+            - Customer
+        resourceId:
+          type: string
+          description: The specific resource affected
+          examples:
+            - cust-1001
+        payload:
+          $ref: '#/components/schemas/EventPayload'
+        timestamp:
+          type: string
+          format: date-time
+          description: >-
+            When the event occurred. May be supplied by the caller; if omitted
+            in the request, the server assigns the time at which the event was
+            recorded.
+          examples:
+            - '2026-09-14T10:15:30Z'
+
+    EventPayload:
+      type: object
+      description: A structured object with event-specific detail.
+      additionalProperties: true
+      example:
+        field: address
+        oldValue: 123 Main St
+        newValue: 456 Oak Ave
+
+    AuditEventRequest:
+      description: Audit event to record.
+      allOf:
+        - $ref: '#/components/schemas/AuditEventFields'
+
+    AuditEventResponse:
+      description: >-
+        The persisted audit event, including server-assigned fields used for
+        tamper-evident hash chaining.
+      allOf:
+        - $ref: '#/components/schemas/AuditEventFields'
+        - type: object
+          required:
+            - id
+            - sequenceNumber
+            - timestamp
+            - previousHash
+            - contentHash
+          properties:
+            id:
+              type: string
+              format: uuid
+              description: Server-assigned unique identifier of the audit event
+              examples:
+                - 3fa85f64-5717-4562-b3fc-2c963f66afa6
+            sequenceNumber:
+              type: integer
+              format: int64
+              description: Server-assigned monotonically increasing position of the event in the log
+              examples:
+                - 1024
+            previousHash:
+              type: string
+              pattern: '^[a-f0-9]{64}$'
+              description: SHA-256 content hash of the preceding event in the log (hex-encoded); links this event into the tamper-evident chain
+              examples:
+                - a94a8fe5ccb19ba61c4c0873d391e987982fbbd3a94a8fe5ccb19ba61c4c0873
+            contentHash:
+              type: string
+              pattern: '^[a-f0-9]{64}$'
+              description: SHA-256 hash (hex-encoded) of this event's canonical content, including previousHash
+              examples:
+                - 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+
+    ErrorResponse:
+      type: object
+      description: Error details returned when a request cannot be processed.
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: Human-readable description of the error
+          examples:
+            - actorId is required
+        code:
+          type: string
+          description: Machine-readable error code
+          examples:
+            - VALIDATION_FAILED
