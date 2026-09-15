@@ -20,3 +20,9 @@ spring:
     properties:
       hibernate:
         format_sql: true
+
+springdoc:
+  swagger-ui:
+    # Serve the contract-first spec (src/main/resources/static/openapi.yml) instead of
+    # the runtime-generated one, so the UI matches the code-generated API.
+    url: /openapi.yml
