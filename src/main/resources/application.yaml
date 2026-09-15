@@ -26,3 +26,12 @@ springdoc:
     # Serve the contract-first spec (src/main/resources/static/openapi.yml) instead of
     # the runtime-generated one, so the UI matches the code-generated API.
     url: /openapi.yml
+
+audit:
+  events:
+    # Records whose created_at is older than this are archived by the scheduler.
+    retention-days: 30
+    # Fixed delay between archive runs, in milliseconds (default: 24h).
+    archive-interval-ms: 86400000
+    # Delay before the first archive run after startup, in milliseconds.
+    archive-initial-delay-ms: 60000

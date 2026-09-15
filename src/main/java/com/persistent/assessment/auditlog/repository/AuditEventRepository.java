@@ -5,6 +5,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -72,5 +73,22 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, UUID> {
 			ORDER BY e.sequenceNumber ASC
 			""")
 	List<AuditEvent> findAllInSequence();
+
+	/**
+	 * Archives every event recorded before the cutoff with a single bulk {@code DELETE}.
+	 *
+	 * <p>Filtering on {@code created_at} happens in the database, so arbitrarily many
+	 * expired rows can be removed without loading them into application memory.
+	 *
+	 * @param cutoff exclusive upper bound on the record's {@code created_at} timestamp
+	 * @return the number of archived rows
+	 */
+	@Modifying
+	@Query("""
+			DELETE
+			FROM AuditEvent e
+			WHERE e.createdAt < :cutoff
+			""")
+	int deleteEventsCreatedBefore(@Param("cutoff") OffsetDateTime cutoff);
 
 }
