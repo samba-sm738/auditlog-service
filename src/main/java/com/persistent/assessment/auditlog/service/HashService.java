@@ -59,21 +59,26 @@ public class HashService {
 	/**
 	 * Creates the canonical representation of the event used to compute the content hash.
 	 *
-	 * <p>Fields are written in the exact order defined by the contract, and the hash fields
-	 * themselves ({@code previousHash} and {@code contentHash}) are deliberately excluded.
+	 * <p>Fields are written in the exact order defined by the contract. The preceding record's
+	 * hash is part of the canonical content, which is what makes the log tamper-evident: an
+	 * event cannot be moved, removed or spliced into a different position without invalidating
+	 * its own content hash and every hash after it. The event's own {@code contentHash} is
+	 * necessarily excluded.
 	 *
 	 * @param eventType the event type
 	 * @param actorId the identifier of the actor that triggered the event
 	 * @param resourceType the type of the affected resource
 	 * @param resourceId the identifier of the affected resource
-	 * @param payload the event payload, as a JSON document
+	 * @param payload the event payload
+	 * @param previousHash the content hash of the preceding record, or the genesis hash for
+	 * the first record
 	 * @param timestamp the event timestamp, normalized to UTC before hashing
 	 * @return the canonical JSON representation of the event
-	 * @throws IllegalArgumentException if the payload is not valid JSON or the event cannot
-	 * be serialized
+	 * @throws IllegalArgumentException if the event cannot be serialized
 	 */
 	public String canonicalize(String eventType, String actorId, String resourceType,
-			String resourceId, String payload, OffsetDateTime timestamp) {
+			String resourceId, Map<String, Object> payload, String previousHash,
+			OffsetDateTime timestamp) {
 		try {
 			ObjectNode event = objectMapper.createObjectNode();
 
@@ -83,11 +88,15 @@ public class HashService {
 			event.put("resourceType", resourceType);
 			event.put("resourceId", resourceId);
 
-			// Parse payload as JSON rather than treating it as a plain string.
-			event.set("payload", canonicalizeJson(payload));
+			// Hash the payload as JSON, so that its structure and not its Java rendering is
+			// what is committed to.
+			event.set("payload", canonicalizePayload(payload));
 
 			// Always hash the timestamp in UTC.
 			event.put("timestamp", timestamp.toInstant().toString());
+
+			// Chain link: binds this event to its position in the log.
+			event.put("previousHash", previousHash);
 
 			return objectMapper.writeValueAsString(event);
 		}
@@ -97,26 +106,26 @@ public class HashService {
 	}
 
 	/**
-	 * Parses and canonicalizes the payload JSON.
+	 * Canonicalizes the event payload.
 	 *
 	 * <p>Object properties are recursively sorted so that logically equivalent JSON objects
-	 * produce the same hash.
+	 * produce the same hash. A missing payload canonicalizes to an empty object.
 	 *
-	 * @param payload the payload to canonicalize, as a JSON document
+	 * @param payload the payload to canonicalize
 	 * @return the canonicalized payload
-	 * @throws IllegalArgumentException if the payload is missing or not valid JSON
+	 * @throws IllegalArgumentException if the payload cannot be represented as JSON
 	 */
-	public JsonNode canonicalizeJson(String payload) {
+	public JsonNode canonicalizePayload(Map<String, Object> payload) {
 		try {
-			JsonNode node = objectMapper.readTree(payload);
+			JsonNode node = objectMapper.valueToTree(payload == null ? Map.of() : payload);
 			if (node == null || node.isMissingNode()) {
-				throw new IllegalArgumentException("Payload must be valid JSON");
+				throw new IllegalArgumentException("Payload must be representable as JSON");
 			}
 
 			return sortJsonNode(node);
 		}
 		catch (JacksonException e) {
-			throw new IllegalArgumentException("Payload must contain valid JSON", e);
+			throw new IllegalArgumentException("Payload must be representable as JSON", e);
 		}
 	}
 

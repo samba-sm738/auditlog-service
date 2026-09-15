@@ -5,7 +5,6 @@ import com.persistent.assessment.auditlog.model.AuditVerificationResponse;
 import com.persistent.assessment.auditlog.model.HashChainViolation;
 import com.persistent.assessment.auditlog.repository.AuditEventRepository;
 
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -49,8 +48,7 @@ public class AuditVerificationService {
 		long expectedSequence = 1;
 		long recordsChecked = 0;
 
-		for (AuditEvent event : auditEventRepository
-				.findAll(Sort.by(Sort.Direction.ASC, "sequenceNumber"))) {
+		for (AuditEvent event : auditEventRepository.findAllInSequence()) {
 
 			recordsChecked++;
 
@@ -70,7 +68,8 @@ public class AuditVerificationService {
 					event.getActorId(),
 					event.getResourceType(),
 					event.getResourceId(),
-					event.getPayload().toString(),
+					event.getPayload(),
+					event.getPreviousHash(),
 					event.getEventTimestamp());
 
 			String calculatedHash = hashService.hash(canonicalEvent);

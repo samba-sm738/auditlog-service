@@ -9,16 +9,19 @@ import com.persistent.assessment.auditlog.repository.AuditEventRepository;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Limit;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AuditEventService {
+
+	/** Precision of the timestamp columns, i.e. {@code TIMESTAMP(6) WITH TIME ZONE}. */
+	private static final ChronoUnit TIMESTAMP_PRECISION = ChronoUnit.MICROS;
 
 	private final AuditEventRepository eventRepository;
 
@@ -35,53 +38,63 @@ public class AuditEventService {
 
 	@Transactional
 	public AuditEvent append(AuditEventRequest request) {
-		AuditChainState chainState =
-                chainStateRepository.getChainTip();
+		// Locks the singleton chain tip row, so that concurrent appends cannot claim the same
+		// sequence number or chain onto the same previous hash.
+		AuditChainState chainState = chainStateRepository.getChainTip();
 
-        long sequenceNumber =
-                chainState.getNextSequenceNumber();
+		if (chainState == null) {
+			throw new IllegalStateException(
+					"Audit chain state is missing: the audit_chain_state genesis row must be seeded");
+		}
 
-        String previousHash =
-                chainState.getLatestHash();
+		long sequenceNumber = chainState.getNextSequenceNumber();
 
-        OffsetDateTime timestamp =
-                OffsetDateTime.now(ZoneOffset.UTC);
+		String previousHash = chainState.getLatestHash();
 
-        String canonicalEvent =
-                hashService.canonicalize(
-                        request.getEventType(),
-                        request.getActorId(),
-                        request.getResourceType(),
-                        request.getResourceId(),
-                        request.getPayload().toString(),
-                        timestamp
-                );
+		// The caller may state when the event occurred; otherwise it is recorded as now.
+		// Either way the timestamp is normalized to UTC and truncated to the precision the
+		// column stores before it is hashed: hashing a value the database would then round
+		// would make the record unverifiable the moment it is read back.
+		OffsetDateTime timestamp = (request.getTimestamp() == null
+				? OffsetDateTime.now(ZoneOffset.UTC)
+				: request.getTimestamp().withOffsetSameInstant(ZoneOffset.UTC))
+				.truncatedTo(TIMESTAMP_PRECISION);
 
-        String contentHash =
-                hashService.hash(canonicalEvent);
+		// The payload column is NOT NULL, and an absent payload hashes as an empty object.
+		Map<String, Object> payload = request.getPayload() == null ? Map.of() : request.getPayload();
 
-        AuditEvent event = new AuditEvent();
+		String canonicalEvent = hashService.canonicalize(
+				request.getEventType(),
+				request.getActorId(),
+				request.getResourceType(),
+				request.getResourceId(),
+				payload,
+				previousHash,
+				timestamp);
 
-        event.setId(UUID.randomUUID());
-        event.setSequenceNumber(sequenceNumber);
-        event.setEventType(request.getEventType());
-        event.setActorId(request.getActorId());
-        event.setResourceType(request.getResourceType());
-        event.setResourceId(request.getResourceId());
-        event.setPayload(request.getPayload());
-        event.setEventTimestamp(timestamp);
-        event.setPreviousHash(previousHash);
-        event.setContentHash(contentHash);
-        event.setCreatedAt(timestamp);
+		String contentHash = hashService.hash(canonicalEvent);
 
-        AuditEvent saved =
-                eventRepository.save(event);
+		AuditEvent event = new AuditEvent();
 
-        chainState.advance(contentHash);
+		event.setId(UUID.randomUUID());
+		event.setSequenceNumber(sequenceNumber);
+		event.setEventType(request.getEventType());
+		event.setActorId(request.getActorId());
+		event.setResourceType(request.getResourceType());
+		event.setResourceId(request.getResourceId());
+		event.setPayload(payload);
+		event.setEventTimestamp(timestamp);
+		event.setPreviousHash(previousHash);
+		event.setContentHash(contentHash);
+		event.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(TIMESTAMP_PRECISION));
 
-        chainStateRepository.save(chainState);
+		AuditEvent saved = eventRepository.save(event);
 
-        return saved;
+		chainState.advance(contentHash);
+
+		chainStateRepository.save(chainState);
+
+		return saved;
 	}
 
 	@Transactional(readOnly = true)
@@ -90,13 +103,34 @@ public class AuditEventService {
 				.orElseThrow(() -> new AuditEventNotFoundException(id));
 	}
 
+	/**
+	 * Reads one cursor page of the audit log.
+	 *
+	 * <p>One row more than the requested page size is read, so that the presence of a further
+	 * page is known without counting the whole log. The extra row is dropped before returning.
+	 *
+	 * @param query the filters, cursor and page size to apply
+	 * @return the page of events, together with the cursor to read the next one
+	 */
 	@Transactional(readOnly = true)
-	public Page<AuditEvent> findPage(Pageable pageable) {
-		return eventRepository.findAll(pageable);
-	}
+	public AuditEventSlice findSlice(AuditEventQuery query) {
+		List<AuditEvent> rows = eventRepository.findSlice(
+				query.cursor(),
+				query.actorId(),
+				query.resourceType(),
+				query.resourceId(),
+				query.eventType(),
+				query.from(),
+				query.to(),
+				Limit.of(query.pageSize() + 1));
 
-	public List<AuditEvent> findAllInSequence() {
-		return eventRepository.findAll(Sort.by(Sort.Direction.ASC, "sequenceNumber"));
+		boolean hasMore = rows.size() > query.pageSize();
+
+		List<AuditEvent> events = hasMore ? List.copyOf(rows.subList(0, query.pageSize())) : rows;
+
+		Long nextCursor = hasMore ? events.getLast().getSequenceNumber() : null;
+
+		return new AuditEventSlice(events, nextCursor, hasMore);
 	}
 
 	@Transactional(readOnly = true)
@@ -105,6 +139,47 @@ public class AuditEventService {
 				.orElseThrow(() -> new IllegalStateException("Audit chain state is missing"));
 
 		return new AuditChainTip(state.getNextSequenceNumber(), state.getLatestHash());
+	}
+
+	/**
+	 * A query against the audit log: optional filters combined with AND, plus the cursor and
+	 * page size that bound the returned slice.
+	 *
+	 * @param actorId the actor to filter on, or {@code null} for any actor
+	 * @param resourceType the resource type to filter on, or {@code null} for any type
+	 * @param resourceId the resource id to filter on, or {@code null} for any resource
+	 * @param eventType the event type to filter on, or {@code null} for any type
+	 * @param from inclusive lower bound on the event timestamp, or {@code null} for none
+	 * @param to exclusive upper bound on the event timestamp, or {@code null} for none
+	 * @param cursor exclusive lower bound on the sequence number, or {@code null} to start
+	 * from the beginning of the log
+	 * @param pageSize maximum number of events to return
+	 */
+	public record AuditEventQuery(
+			String actorId,
+			String resourceType,
+			String resourceId,
+			String eventType,
+			OffsetDateTime from,
+			OffsetDateTime to,
+			Long cursor,
+			int pageSize
+	) {
+	}
+
+	/**
+	 * One page of the audit log.
+	 *
+	 * @param events the events on this page, in ascending sequence order
+	 * @param nextCursor the cursor to pass back to read the next page, or {@code null} when
+	 * this is the last page
+	 * @param hasMore whether at least one further matching event exists after this page
+	 */
+	public record AuditEventSlice(
+			List<AuditEvent> events,
+			Long nextCursor,
+			boolean hasMore
+	) {
 	}
 
 	public record AuditChainTip(

@@ -11,6 +11,11 @@ spring:
       mode: always
       schema-locations: classpath:sql/schema.sql
   jpa:
+    # schema.sql owns the schema, including the constraints and the genesis chain-state row.
+    # Hibernate must not touch it: for an embedded datasource it would otherwise default to
+    # create-drop and recreate the tables after schema.sql ran, discarding the genesis row.
+    hibernate:
+      ddl-auto: none
     show-sql: true
     properties:
       hibernate:

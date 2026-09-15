@@ -67,9 +67,17 @@ paths:
       operationId: listAuditEvents
       summary: Query audit events
       description: >-
-        Returns a paginated, chronologically ordered page of audit events.
-        All filters are optional and are combined with AND semantics; omitting
-        every filter returns the whole log, page by page.
+        Returns a cursor-paginated, chronologically ordered page of audit events.
+        Events are ordered by ascending sequence number, which is the append order
+        of the tamper-evident log. All filters are optional and are combined with
+        AND semantics; omitting every filter returns the whole log, page by page.
+
+
+        Paging is keyset (cursor) based rather than offset based: pass the
+        nextCursor returned by the previous response back as the cursor parameter
+        to fetch the next page. Because the log is append-only and sequence
+        numbers never change, this guarantees no event is skipped or repeated
+        while a client is walking the log, and stays fast at any depth.
       tags:
         - Audit Events
       parameters:
@@ -117,16 +125,19 @@ paths:
             type: string
             format: date-time
           example: '2026-10-01T00:00:00Z'
-        - name: page
+        - name: cursor
           in: query
           required: false
-          description: Zero-based index of the page to return
+          description: >-
+            Sequence number of the last event of the previous page; only events
+            with a strictly greater sequence number are returned. Omit it to read
+            from the start of the log, and otherwise pass back the nextCursor
+            value from the previous response.
           schema:
             type: integer
-            format: int32
+            format: int64
             minimum: 0
-            default: 0
-          example: 0
+          example: 1024
         - name: pageSize
           in: query
           required: false
@@ -160,10 +171,9 @@ paths:
                     timestamp: '2026-09-14T10:15:30Z'
                     previousHash: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3a94a8fe5ccb19ba61c4c0873
                     contentHash: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
-                page: 0
                 pageSize: 20
-                totalElements: 1
-                totalPages: 1
+                nextCursor: 1024
+                hasMore: true
         '400':
           description: Invalid query parameters
           content:
@@ -308,43 +318,40 @@ components:
 
     AuditEventPage:
       type: object
-      description: A single page of audit events together with its pagination metadata.
+      description: >-
+        A single page of audit events together with the cursor needed to read the
+        next page. No total count is reported: counting every matching row defeats
+        the purpose of keyset pagination on an append-only log that only grows.
       required:
         - content
-        - page
         - pageSize
-        - totalElements
-        - totalPages
+        - hasMore
       properties:
         content:
           type: array
           description: The audit events on this page, in ascending sequence order
           items:
             $ref: '#/components/schemas/AuditEventResponse'
-        page:
-          type: integer
-          format: int32
-          description: Zero-based index of the returned page
-          examples:
-            - 0
         pageSize:
           type: integer
           format: int32
           description: Maximum number of events per page used for this query
           examples:
             - 20
-        totalElements:
+        nextCursor:
           type: integer
           format: int64
-          description: Total number of events matching the query across all pages
+          description: >-
+            Cursor to send as the cursor parameter to read the next page. It is
+            the sequence number of the last event on this page, and is null when
+            hasMore is false.
           examples:
-            - 1
-        totalPages:
-          type: integer
-          format: int32
-          description: Total number of pages available for the query
+            - 1024
+        hasMore:
+          type: boolean
+          description: True when at least one further matching event exists after this page
           examples:
-            - 1
+            - true
 
     AuditVerificationResponse:
       type: object

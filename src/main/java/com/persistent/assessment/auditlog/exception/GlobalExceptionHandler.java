@@ -8,12 +8,29 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-	// TODO: extend with handlers for domain-specific failures (e.g. chain verification errors)
-	// TODO: once EventService is implemented
+	@ExceptionHandler(AuditEventNotFoundException.class)
+	public ResponseEntity<ErrorResponse> handleNotFound(AuditEventNotFoundException ex) {
+		ErrorResponse body = new ErrorResponse(ex.getMessage());
+		body.setCode("AUDIT_EVENT_NOT_FOUND");
+		return ResponseEntity.status(HttpStatus.NOT_FOUND).body(body);
+	}
+
+	/** Raised when a query parameter cannot be bound, e.g. a non-numeric cursor. */
+	@ExceptionHandler(MethodArgumentTypeMismatchException.class)
+	public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+		return badRequest(ex.getName() + " has an invalid value");
+	}
+
+	/** Raised for cross-field query rules the generated contract cannot express. */
+	@ExceptionHandler(IllegalArgumentException.class)
+	public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex) {
+		return badRequest(ex.getMessage());
+	}
 
 	@ExceptionHandler(ConstraintViolationException.class)
 	public ResponseEntity<ErrorResponse> handleConstraintViolation(ConstraintViolationException ex) {
