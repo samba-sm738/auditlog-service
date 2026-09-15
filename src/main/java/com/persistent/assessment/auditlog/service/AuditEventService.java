@@ -61,7 +61,10 @@ public class AuditEventService {
 				.truncatedTo(TIMESTAMP_PRECISION);
 
 		// The payload column is NOT NULL, and an absent payload hashes as an empty object.
-		Map<String, Object> payload = request.getPayload() == null ? Map.of() : request.getPayload();
+		// A present accountNumber is redacted before canonicalizing, so the clear-text
+		// value is neither committed to by the content hash nor persisted.
+		Map<String, Object> payload = PayloadRedactor.redactAccountNumbers(
+				request.getPayload() == null ? Map.of() : request.getPayload());
 
 		String canonicalEvent = hashService.canonicalize(
 				request.getEventType(),

@@ -5,8 +5,11 @@ import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -27,6 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@ExtendWith(OutputCaptureExtension.class)
 class AuditEventControllerTests {
 
 	private static final String GENESIS_HASH = "0".repeat(64);
@@ -209,6 +213,112 @@ class AuditEventControllerTests {
 	}
 
 	@Test
+	void redactsAccountNumberOnCreateAndList() throws Exception {
+		JsonNode created = postPayload("{ \"accountNumber\": \"1234567890123456\", "
+				+ "\"status\": \"ACTIVE\", \"amount\": 100 }");
+
+		JsonNode payload = created.get("payload");
+		assertThat(payload.get("accountNumber").asString()).isEqualTo("[REDACTED]");
+		assertThat(payload.get("status").asString()).isEqualTo("ACTIVE");
+		assertThat(payload.get("amount").asInt()).isEqualTo(100);
+
+		// The redacted form is what was persisted, so it is what the list endpoint returns.
+		JsonNode listed = list("/v1/audit/events").get("content").get(0).get("payload");
+		assertThat(listed.get("accountNumber").asString()).isEqualTo("[REDACTED]");
+		assertThat(listed.get("status").asString()).isEqualTo("ACTIVE");
+		assertThat(listed.get("amount").asInt()).isEqualTo(100);
+	}
+
+	@Test
+	void leavesPayloadsWithoutAccountNumberUnchanged() throws Exception {
+		JsonNode created = postPayload("{ \"status\": \"ACTIVE\", \"amount\": 100 }");
+
+		JsonNode payload = created.get("payload");
+		assertThat(payload.has("accountNumber")).isFalse();
+		assertThat(payload.get("status").asString()).isEqualTo("ACTIVE");
+		assertThat(payload.get("amount").asInt()).isEqualTo(100);
+	}
+
+	@Test
+	void treatsNullAndEmptyAccountNumbersAsPresent() throws Exception {
+		JsonNode nullValue = postPayload("{ \"accountNumber\": null, \"status\": \"ACTIVE\" }");
+		assertThat(nullValue.get("payload").get("accountNumber").asString())
+				.isEqualTo("[REDACTED]");
+
+		JsonNode emptyValue = postPayload("{ \"accountNumber\": \"\", \"status\": \"ACTIVE\" }");
+		assertThat(emptyValue.get("payload").get("accountNumber").asString())
+				.isEqualTo("[REDACTED]");
+	}
+
+	@Test
+	void redactsNonStringAccountNumbers() throws Exception {
+		JsonNode created = postPayload("{ \"accountNumber\": 123456789, \"status\": \"ACTIVE\" }");
+
+		assertThat(created.get("payload").get("accountNumber").asString())
+				.isEqualTo("[REDACTED]");
+	}
+
+	@Test
+	void doesNotRedactLookalikeFieldNames() throws Exception {
+		JsonNode created = postPayload("{ \"accountNumber\": \"123456\", "
+				+ "\"accountNumberType\": \"SAVINGS\", \"accountNumberLast4\": \"3456\" }");
+
+		JsonNode payload = created.get("payload");
+		assertThat(payload.get("accountNumber").asString()).isEqualTo("[REDACTED]");
+		assertThat(payload.get("accountNumberType").asString()).isEqualTo("SAVINGS");
+		assertThat(payload.get("accountNumberLast4").asString()).isEqualTo("3456");
+	}
+
+	@Test
+	void neverExposesTheRawAccountNumberInListResponses() throws Exception {
+		postPayload("{ \"accountNumber\": \"1234567890123456\", \"status\": \"ACTIVE\" }");
+
+		String body = mockMvc.perform(get("/v1/audit/events"))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+
+		assertThat(body).doesNotContain("1234567890123456");
+	}
+
+	@Test
+	void keepsTheLogVerifiableWhenPayloadsAreRedacted() throws Exception {
+		postPayload("{ \"accountNumber\": \"1234567890123456\", \"status\": \"ACTIVE\" }");
+		postPayload("{ \"status\": \"ACTIVE\", \"amount\": 100 }");
+
+		mockMvc.perform(get("/v1/audit/verify"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.valid").value(true))
+				.andExpect(jsonPath("$.recordsChecked").value(2));
+	}
+
+	@Test
+	void detectsTamperingWithARedactedEvent() throws Exception {
+		postPayload("{ \"accountNumber\": \"1234567890123456\", \"status\": \"ACTIVE\" }");
+		postPayload("{ \"status\": \"ACTIVE\" }");
+
+		jdbcTemplate.update("UPDATE audit_events SET payload = "
+				+ "JSON '{\"accountNumber\":\"999\",\"status\":\"CLOSED\"}' "
+				+ "WHERE sequence_number = 1");
+
+		mockMvc.perform(get("/v1/audit/verify"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.valid").value(false))
+				.andExpect(jsonPath("$.firstViolation.sequenceNumber").value(1))
+				.andExpect(jsonPath("$.firstViolation.type").value("CONTENT_HASH_MISMATCH"));
+	}
+
+	@Test
+	void doesNotLogTheRawAccountNumber(CapturedOutput output) throws Exception {
+		postPayload("{ \"accountNumber\": \"5556667778889990\", \"status\": \"ACTIVE\" }");
+
+		list("/v1/audit/events");
+
+		assertThat(output).doesNotContain("5556667778889990");
+	}
+
+	@Test
 	void detectsTamperingWithARecordedEvent() throws Exception {
 		append("user-1", "Customer", "cust-1", "USER_LOGIN", "2026-09-14T10:00:00Z");
 		append("user-2", "Customer", "cust-2", "USER_LOGIN", "2026-09-14T10:01:00Z");
@@ -257,6 +367,29 @@ class AuditEventControllerTests {
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(body))
 				.andExpect(status().isCreated());
+	}
+
+	private JsonNode postPayload(String payload) throws Exception {
+		String body = """
+				{
+				  "eventType": "ACCOUNT_UPDATED",
+				  "actorId": "user-1",
+				  "resourceType": "Customer",
+				  "resourceId": "cust-1",
+				  "payload": %s,
+				  "timestamp": "2026-09-14T10:00:00Z"
+				}
+				""".formatted(payload);
+
+		String response = mockMvc.perform(post("/v1/audit/events")
+						.contentType(MediaType.APPLICATION_JSON)
+						.content(body))
+				.andExpect(status().isCreated())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+
+		return objectMapper.readTree(response);
 	}
 
 	private JsonNode list(String uri) throws Exception {

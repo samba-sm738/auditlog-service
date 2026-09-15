@@ -134,6 +134,27 @@ class AuditEventServiceTest {
 	}
 
 	@Test
+	void appendRedactsAccountNumberBeforeHashingAndStorage() {
+		AuditChainState state = chainState(1, GENESIS_HASH);
+		stubChainTip(state);
+
+		AuditEventRequest request = request()
+				.payload(Map.of("accountNumber", "1234567890123456", "status", "ACTIVE"));
+
+		AuditEvent saved = service.append(request);
+
+		// Only the redacted form is hashed and persisted; the clear-text value never
+		// reaches the content hash or the database.
+		assertThat(saved.getPayload())
+				.containsEntry("accountNumber", "[REDACTED]")
+				.containsEntry("status", "ACTIVE");
+
+		verify(hashService).canonicalize(anyString(), anyString(), anyString(), anyString(),
+				eq(Map.of("accountNumber", "[REDACTED]", "status", "ACTIVE")),
+				eq(GENESIS_HASH), any(OffsetDateTime.class));
+	}
+
+	@Test
 	void appendFailsWhenChainStateIsMissing() {
 		when(chainStateRepository.getChainTip()).thenReturn(null);
 

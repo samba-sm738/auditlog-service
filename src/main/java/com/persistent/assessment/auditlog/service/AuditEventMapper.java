@@ -20,7 +20,7 @@ public final class AuditEventMapper {
 				.actorId(event.getActorId())
 				.resourceType(event.getResourceType())
 				.resourceId(event.getResourceId())
-				.payload(event.getPayload())
+				.payload(PayloadRedactor.redactAccountNumbers(event.getPayload()))
 				.timestamp(event.getEventTimestamp())
 				.previousHash(event.getPreviousHash())
 				.contentHash(event.getContentHash());
