@@ -10,9 +10,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public interface AuditEventJpaRepository extends JpaRepository<AuditEvent, UUID> {
+public interface AuditEventRepository extends JpaRepository<AuditEvent, UUID> {
 
-	Optional<AuditEvent> findById(UUID id);
+    Optional<AuditEvent> findById(UUID id);
 
     Page<AuditEvent> findAll(Pageable pageable);
 

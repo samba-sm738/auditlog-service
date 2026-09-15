@@ -1,4 +1,4 @@
-package com.persistent.assessment.auditlog.controller;
+package com.persistent.assessment.auditlog.exception;
 
 import com.persistent.assessment.auditlog.model.ErrorResponse;
 import jakarta.validation.ConstraintViolationException;

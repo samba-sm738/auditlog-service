@@ -23,4 +23,9 @@ public class AuditChainState {
 	@Column(name = "latest_hash", nullable = false, length = 64)
 	private String latestHash;
 
+	public void advance(String newHash) {
+        this.nextSequenceNumber++;
+        this.latestHash = newHash;
+    }
+
 }
