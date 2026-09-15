@@ -6,4 +6,12 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password:
-    
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:sql/schema.sql
+  jpa:
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
