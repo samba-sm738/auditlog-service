@@ -63,6 +63,149 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+    get:
+      operationId: listAuditEvents
+      summary: Query audit events
+      description: >-
+        Returns a paginated, chronologically ordered page of audit events.
+        All filters are optional and are combined with AND semantics; omitting
+        every filter returns the whole log, page by page.
+      tags:
+        - Audit Events
+      parameters:
+        - name: actorId
+          in: query
+          required: false
+          description: Only return events caused by this actor
+          schema:
+            type: string
+          example: user-42
+        - name: resourceType
+          in: query
+          required: false
+          description: Only return events affecting this type of resource
+          schema:
+            type: string
+          example: Customer
+        - name: resourceId
+          in: query
+          required: false
+          description: Only return events affecting this specific resource
+          schema:
+            type: string
+          example: cust-1001
+        - name: eventType
+          in: query
+          required: false
+          description: Only return events of this type
+          schema:
+            type: string
+          example: RECORD_UPDATED
+        - name: from
+          in: query
+          required: false
+          description: Only return events with a timestamp at or after this instant (inclusive)
+          schema:
+            type: string
+            format: date-time
+          example: '2026-09-01T00:00:00Z'
+        - name: to
+          in: query
+          required: false
+          description: Only return events with a timestamp strictly before this instant (exclusive)
+          schema:
+            type: string
+            format: date-time
+          example: '2026-10-01T00:00:00Z'
+        - name: page
+          in: query
+          required: false
+          description: Zero-based index of the page to return
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            default: 0
+          example: 0
+        - name: pageSize
+          in: query
+          required: false
+          description: Maximum number of events to return per page
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 20
+          example: 20
+      responses:
+        '200':
+          description: Page of matching audit events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventPage'
+              example:
+                content:
+                  - id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                    sequenceNumber: 1024
+                    eventType: RECORD_UPDATED
+                    actorId: user-42
+                    resourceType: Customer
+                    resourceId: cust-1001
+                    payload:
+                      field: address
+                      oldValue: 123 Test Dr
+                      newValue: 456 Oak Ave
+                    timestamp: '2026-09-14T10:15:30Z'
+                    previousHash: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3a94a8fe5ccb19ba61c4c0873
+                    contentHash: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+                page: 0
+                pageSize: 20
+                totalElements: 1
+                totalPages: 1
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/audit/verify:
+    get:
+      operationId: verifyAuditLog
+      summary: Verify the integrity of the audit log
+      description: >-
+        Walks the audit log in sequence order and recomputes each event's
+        content hash and previousHash link. Returns whether the chain is intact,
+        how many records were checked, and details of the first violation found
+        (if any).
+      tags:
+        - Audit Events
+      responses:
+        '200':
+          description: Verification completed; the result reports whether the log is intact
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditVerificationResponse'
+              examples:
+                valid:
+                  summary: Hash chain is intact
+                  value:
+                    valid: true
+                    recordsChecked: 15042
+                    firstViolation: null
+                invalid:
+                  summary: Tampering detected
+                  value:
+                    valid: false
+                    recordsChecked: 42
+                    firstViolation:
+                      sequenceNumber: 42
+                      recordId: '019...'
+                      type: CONTENT_HASH_MISMATCH
+                      message: Stored content hash does not match canonical event content.
 
 components:
   schemas:
@@ -162,6 +305,104 @@ components:
               description: SHA-256 hash (hex-encoded) of this event's canonical content, including previousHash
               examples:
                 - 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+
+    AuditEventPage:
+      type: object
+      description: A single page of audit events together with its pagination metadata.
+      required:
+        - content
+        - page
+        - pageSize
+        - totalElements
+        - totalPages
+      properties:
+        content:
+          type: array
+          description: The audit events on this page, in ascending sequence order
+          items:
+            $ref: '#/components/schemas/AuditEventResponse'
+        page:
+          type: integer
+          format: int32
+          description: Zero-based index of the returned page
+          examples:
+            - 0
+        pageSize:
+          type: integer
+          format: int32
+          description: Maximum number of events per page used for this query
+          examples:
+            - 20
+        totalElements:
+          type: integer
+          format: int64
+          description: Total number of events matching the query across all pages
+          examples:
+            - 1
+        totalPages:
+          type: integer
+          format: int32
+          description: Total number of pages available for the query
+          examples:
+            - 1
+
+    AuditVerificationResponse:
+      type: object
+      description: Result of verifying the tamper-evident hash chain of the audit log.
+      required:
+        - valid
+        - recordsChecked
+      properties:
+        valid:
+          type: boolean
+          description: True when the hash chain is intact and no tampering was detected
+          examples:
+            - true
+        recordsChecked:
+          type: integer
+          format: int64
+          description: >-
+            Number of audit records inspected. When a violation is found,
+            verification stops and this is the count checked up to and including
+            the offending record.
+          examples:
+            - 15042
+        firstViolation:
+          description: Details of the first integrity violation found, or null when the log is valid.
+          oneOf:
+            - $ref: '#/components/schemas/HashChainViolation'
+            - type: 'null'
+
+    HashChainViolation:
+      type: object
+      description: The first point in the audit log at which integrity verification failed.
+      required:
+        - sequenceNumber
+        - recordId
+        - type
+        - message
+      properties:
+        sequenceNumber:
+          type: integer
+          format: int64
+          description: Sequence number of the offending audit record
+          examples:
+            - 42
+        recordId:
+          type: string
+          description: Identifier of the offending audit record
+          examples:
+            - '019...'
+        type:
+          type: string
+          description: Machine-readable kind of integrity violation
+          examples:
+            - CONTENT_HASH_MISMATCH
+        message:
+          type: string
+          description: Human-readable explanation of the violation
+          examples:
+            - Stored content hash does not match canonical event content.
 
     ErrorResponse:
       type: object
