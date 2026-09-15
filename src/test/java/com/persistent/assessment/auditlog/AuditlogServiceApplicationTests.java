@@ -1,4 +1,4 @@
-package com.persistent.assessment.auditlog_service;
+package com.persistent.assessment.auditlog;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
