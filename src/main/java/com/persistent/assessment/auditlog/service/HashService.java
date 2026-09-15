@@ -23,7 +23,8 @@ import tools.jackson.databind.node.ObjectNode;
 @Component
 public class HashService {
 
-	private static final String ALGORITHM = "SHA-256";
+	/** The hash algorithm used for contentHash and previousHash. */
+	public static final String ALGORITHM = "SHA-256";
 
 	/**
 	 * Dedicated mapper rather than the application-wide bean: canonicalization must never

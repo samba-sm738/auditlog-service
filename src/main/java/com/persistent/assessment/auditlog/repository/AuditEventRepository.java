@@ -75,6 +75,28 @@ public interface AuditEventRepository extends JpaRepository<AuditEvent, UUID> {
 	List<AuditEvent> findAllInSequence();
 
 	/**
+	 * Reads the complete history of one resource for export.
+	 *
+	 * <p>Filtering happens in the database, backed by the
+	 * {@code idx_audit_events_resource} index.
+	 *
+	 * @param resourceId the resource to export
+	 * @return the matching events, in ascending sequence (append) order
+	 */
+	List<AuditEvent> findByResourceIdOrderBySequenceNumberAsc(String resourceId);
+
+	/**
+	 * Reads every event caused by one actor for export.
+	 *
+	 * <p>Filtering happens in the database, backed by the
+	 * {@code idx_audit_events_actor} index.
+	 *
+	 * @param actorId the actor to export
+	 * @return the matching events, in ascending sequence (append) order
+	 */
+	List<AuditEvent> findByActorIdOrderBySequenceNumberAsc(String actorId);
+
+	/**
 	 * Archives every event recorded before the cutoff with a single bulk {@code DELETE}.
 	 *
 	 * <p>Filtering on {@code created_at} happens in the database, so arbitrarily many

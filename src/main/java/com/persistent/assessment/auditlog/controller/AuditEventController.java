@@ -5,10 +5,13 @@ import com.persistent.assessment.auditlog.entity.AuditEvent;
 import com.persistent.assessment.auditlog.model.AuditEventPage;
 import com.persistent.assessment.auditlog.model.AuditEventRequest;
 import com.persistent.assessment.auditlog.model.AuditEventResponse;
+import com.persistent.assessment.auditlog.model.AuditExportBundle;
 import com.persistent.assessment.auditlog.model.AuditVerificationResponse;
+import com.persistent.assessment.auditlog.service.AuditEventMapper;
 import com.persistent.assessment.auditlog.service.AuditEventService;
 import com.persistent.assessment.auditlog.service.AuditEventService.AuditEventQuery;
 import com.persistent.assessment.auditlog.service.AuditEventService.AuditEventSlice;
+import com.persistent.assessment.auditlog.service.AuditExportService;
 import com.persistent.assessment.auditlog.service.AuditVerificationService;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -26,10 +29,13 @@ public class AuditEventController implements V1Api {
 
 	private final AuditVerificationService verificationService;
 
+	private final AuditExportService exportService;
+
 	public AuditEventController(AuditEventService eventService,
-			AuditVerificationService verificationService) {
+			AuditVerificationService verificationService, AuditExportService exportService) {
 		this.eventService = eventService;
 		this.verificationService = verificationService;
+		this.exportService = exportService;
 	}
 
 	@Override
@@ -76,18 +82,31 @@ public class AuditEventController implements V1Api {
 	public ResponseEntity<AuditVerificationResponse> verifyAuditLog() {
 		return ResponseEntity.ok(verificationService.verify());
 	}
-	
+
+	/**
+	 * Exports the audit events matching exactly one filter as a verifiable bundle.
+	 *
+	 * <p>Exactly one of {@code resourceId} or {@code actorId} must be supplied (blank
+	 * values count as absent); any other combination is rejected with 400 rather than
+	 * silently widening the scope.
+	 */
+	@Override
+	public ResponseEntity<AuditExportBundle> exportAuditEvents(String resourceId,
+			String actorId) {
+		boolean hasResourceId = resourceId != null && !resourceId.isBlank();
+		boolean hasActorId = actorId != null && !actorId.isBlank();
+
+		if (hasResourceId == hasActorId) {
+			throw new IllegalArgumentException(
+					"exactly one of resourceId or actorId must be supplied");
+		}
+
+		return ResponseEntity.ok(hasResourceId
+				? exportService.exportByResourceId(resourceId)
+				: exportService.exportByActorId(actorId));
+	}
+
 	private AuditEventResponse toResponse(AuditEvent event) {
-		return new AuditEventResponse()
-				.id(event.getId())
-				.sequenceNumber(event.getSequenceNumber())
-				.eventType(event.getEventType())
-				.actorId(event.getActorId())
-				.resourceType(event.getResourceType())
-				.resourceId(event.getResourceId())
-				.payload(event.getPayload())
-				.timestamp(event.getEventTimestamp())
-				.previousHash(event.getPreviousHash())
-				.contentHash(event.getContentHash());
+		return AuditEventMapper.toResponse(event);
 	}
 }

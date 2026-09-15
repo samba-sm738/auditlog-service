@@ -217,6 +217,63 @@ paths:
                       type: CONTENT_HASH_MISMATCH
                       message: Stored content hash does not match canonical event content.
 
+  /v1/audit/export:
+    get:
+      operationId: exportAuditEvents
+      summary: Export audit events as a self-contained verifiable bundle
+      description: >-
+        Returns every audit event matching exactly one filter — resourceId or
+        actorId — as a versioned bundle that can be verified independently of
+        this service. Records are emitted in ascending sequence order, which is
+        their position in the global tamper-evident hash chain.
+
+
+        A filtered export is usually NOT a contiguous segment of the global
+        chain, so each record keeps its original previousHash. Where exported
+        sequence numbers are consecutive the records are adjacent in the global
+        chain and the link current.previousHash == prior.contentHash must hold;
+        where they are not, previousHash is an external reference to a record
+        the filter excluded. The chain metadata anchors the segment: the hash
+        preceding the first exported record (firstPreviousHash) and the content
+        hash of the last one (lastRecordHash) let a recipient pin the export to
+        the chain without seeing the excluded records.
+      tags:
+        - Audit Events
+      parameters:
+        - name: resourceId
+          in: query
+          required: false
+          description: >-
+            Export the history of this specific resource. Exactly one of
+            resourceId or actorId must be supplied; blank values count as absent.
+          schema:
+            type: string
+          example: cust-1001
+        - name: actorId
+          in: query
+          required: false
+          description: >-
+            Export everything this actor caused. Exactly one of resourceId or
+            actorId must be supplied; blank values count as absent.
+          schema:
+            type: string
+          example: user-42
+      responses:
+        '200':
+          description: >-
+            The export bundle. When no events match, the bundle is still valid:
+            recordCount is 0, records is empty and the chain anchors are null.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditExportBundle'
+        '400':
+          description: Both filters supplied, or neither
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   schemas:
     AuditEventFields:
@@ -410,6 +467,113 @@ components:
           description: Human-readable explanation of the violation
           examples:
             - Stored content hash does not match canonical event content.
+
+    AuditExportBundle:
+      type: object
+      description: >-
+        A self-contained, independently verifiable export of the audit events
+        matching one filter. The records carry the same fields the list API
+        returns, including the hash-chain fields previousHash and contentHash,
+        so a recipient can recompute every hash and check the chain anchors
+        without access to this service or its database.
+      required:
+        - format
+        - exportedAt
+        - filter
+        - chain
+        - records
+      properties:
+        format:
+          type: string
+          description: Versioned identifier of the bundle format
+          examples:
+            - audit-bundle-v1
+        exportedAt:
+          type: string
+          format: date-time
+          description: When the bundle was produced
+          examples:
+            - '2026-09-15T08:30:00Z'
+        filter:
+          $ref: '#/components/schemas/AuditExportFilter'
+        chain:
+          $ref: '#/components/schemas/AuditExportChain'
+        records:
+          type: array
+          description: The matching audit events, in ascending sequence order
+          items:
+            $ref: '#/components/schemas/AuditEventResponse'
+
+    AuditExportFilter:
+      type: object
+      description: The single scope the export was filtered on.
+      required:
+        - type
+        - value
+      properties:
+        type:
+          type: string
+          description: Which attribute the export was filtered on
+          examples:
+            - resourceId
+            - actorId
+        value:
+          type: string
+          description: The exact value every exported record matches
+          examples:
+            - cust-1001
+
+    AuditExportChain:
+      type: object
+      description: >-
+        Anchors pinning the exported records to the tamper-evident chain. For
+        an empty export only algorithm and recordCount (0) are set; the anchor
+        fields are null.
+      required:
+        - algorithm
+        - recordCount
+      properties:
+        algorithm:
+          type: string
+          description: Hash algorithm used for contentHash and previousHash
+          examples:
+            - SHA-256
+        firstRecordId:
+          type: string
+          format: uuid
+          description: Identifier of the first exported record
+        firstSequenceNumber:
+          type: integer
+          format: int64
+          description: Sequence number of the first exported record
+          examples:
+            - 1024
+        firstPreviousHash:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+          description: >-
+            previousHash of the first exported record, i.e. the content hash of
+            the (possibly unexported) record that precedes it in the chain
+        lastRecordId:
+          type: string
+          format: uuid
+          description: Identifier of the last exported record
+        lastSequenceNumber:
+          type: integer
+          format: int64
+          description: Sequence number of the last exported record
+          examples:
+            - 1031
+        lastRecordHash:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+          description: contentHash of the last exported record
+        recordCount:
+          type: integer
+          format: int64
+          description: Number of records in the bundle
+          examples:
+            - 3
 
     ErrorResponse:
       type: object

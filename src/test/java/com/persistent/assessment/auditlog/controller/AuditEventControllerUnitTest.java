@@ -18,10 +18,12 @@ import com.persistent.assessment.auditlog.entity.AuditEvent;
 import com.persistent.assessment.auditlog.model.AuditEventPage;
 import com.persistent.assessment.auditlog.model.AuditEventRequest;
 import com.persistent.assessment.auditlog.model.AuditEventResponse;
+import com.persistent.assessment.auditlog.model.AuditExportBundle;
 import com.persistent.assessment.auditlog.model.AuditVerificationResponse;
 import com.persistent.assessment.auditlog.service.AuditEventService;
 import com.persistent.assessment.auditlog.service.AuditEventService.AuditEventQuery;
 import com.persistent.assessment.auditlog.service.AuditEventService.AuditEventSlice;
+import com.persistent.assessment.auditlog.service.AuditExportService;
 import com.persistent.assessment.auditlog.service.AuditVerificationService;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,6 +41,9 @@ class AuditEventControllerUnitTest {
 
 	@Mock
 	private AuditVerificationService verificationService;
+
+	@Mock
+	private AuditExportService exportService;
 
 	@InjectMocks
 	private AuditEventController controller;
@@ -161,6 +166,67 @@ class AuditEventControllerUnitTest {
 
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getBody()).isSameAs(verification);
+	}
+
+	@Test
+	void exportAuditEventsByResourceId() {
+		AuditExportBundle bundle = new AuditExportBundle();
+		when(exportService.exportByResourceId("cust-1")).thenReturn(bundle);
+
+		ResponseEntity<AuditExportBundle> response =
+				controller.exportAuditEvents("cust-1", null);
+
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(response.getBody()).isSameAs(bundle);
+		verify(exportService).exportByResourceId("cust-1");
+	}
+
+	@Test
+	void exportAuditEventsByActorId() {
+		AuditExportBundle bundle = new AuditExportBundle();
+		when(exportService.exportByActorId("user-1")).thenReturn(bundle);
+
+		ResponseEntity<AuditExportBundle> response =
+				controller.exportAuditEvents(null, "user-1");
+
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(response.getBody()).isSameAs(bundle);
+		verify(exportService).exportByActorId("user-1");
+	}
+
+	@Test
+	void exportAuditEventsRejectsBothFilters() {
+		assertThatThrownBy(() -> controller.exportAuditEvents("cust-1", "user-1"))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("exactly one of resourceId or actorId");
+
+		verifyNoInteractions(exportService);
+	}
+
+	@Test
+	void exportAuditEventsRejectsMissingAndBlankFilters() {
+		assertThatThrownBy(() -> controller.exportAuditEvents(null, null))
+				.isInstanceOf(IllegalArgumentException.class);
+
+		assertThatThrownBy(() -> controller.exportAuditEvents(" ", null))
+				.isInstanceOf(IllegalArgumentException.class);
+
+		assertThatThrownBy(() -> controller.exportAuditEvents(null, " "))
+				.isInstanceOf(IllegalArgumentException.class);
+
+		verifyNoInteractions(exportService);
+	}
+
+	@Test
+	void exportAuditEventsTreatsBlankAsAbsent() {
+		AuditExportBundle bundle = new AuditExportBundle();
+		when(exportService.exportByActorId("user-1")).thenReturn(bundle);
+
+		ResponseEntity<AuditExportBundle> response =
+				controller.exportAuditEvents("", "user-1");
+
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+		verify(exportService).exportByActorId("user-1");
 	}
 
 }
